@@ -6,27 +6,38 @@
 -include_lib("etest/include/etest.hrl").
 
 
-test_establishing_a_connection() ->
-    ConnectionArgs = [
+-define(CONTROL_ARGS, [
         {host,     "localhost"},
         {port,     1491},
         {password, "SecretPassword"},
         {mode,     "control"}
-    ],
-
-    {ok, SonicPid} = esonic:start_link(ConnectionArgs),
-    ?assert_equal({ok, <<"PONG">>}, esonic:ping(SonicPid)).
+    ]).
 
 
-test_ingesting_without_specifying_a_locale() ->
-    ConnectionArgs = [
+-define(INGEST_ARGS, [
         {host,     "localhost"},
         {port,     1491},
         {password, "SecretPassword"},
         {mode,     "ingest"}
-    ],
+    ]).
 
-    {ok, SonicPid} = esonic:start_link(ConnectionArgs),
+
+-define(SEARCH_ARGS, [
+        {host,     "localhost"},
+        {port,     1491},
+        {password, "SecretPassword"},
+        {mode,     "search"}
+    ]).
+
+
+
+test_establishing_a_connection() ->
+    {ok, SonicPid} = esonic:start_link(?CONTROL_ARGS),
+    ?assert_equal({ok, <<"PONG">>}, esonic:ping(SonicPid)).
+
+
+test_ingesting_without_specifying_a_locale() ->
+    {ok, SonicPid} = esonic:start_link(?INGEST_ARGS),
 
     Collection = <<"user_1">>,
     Bucket     = <<"default">>,
@@ -38,3 +49,23 @@ test_ingesting_without_specifying_a_locale() ->
     ),
 
     ?assert_equal(ok, esonic:push(SonicPid, Collection, Bucket, ObjectId, Content)).
+
+
+test_basic_query() ->
+    {ok, PushPid}   = esonic:start_link(?INGEST_ARGS),
+    {ok, SearchPid} = esonic:start_link(?SEARCH_ARGS),
+
+    Collection = <<"user_1">>,
+    Bucket     = <<"default">>,
+    ObjectId   = <<"42">>,
+    Term       = <<"rock">>,
+    Title      = <<"Stop Building Rockets">>,
+    Body       = <<"Start planting trees">>,
+    Content    = erlang:iolist_to_binary(
+        lists:join(<<" ">>, [Title, Body])
+    ),
+
+    ok = esonic:push(PushPid, Collection, Bucket, ObjectId, Content),
+
+    ?assert_equal({ok, <<"42">>}, esonic:query(SearchPid, Collection, Bucket, Term)).
+

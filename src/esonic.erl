@@ -14,7 +14,7 @@
 -export([
     ping/1,
     push/5,
-    query/2
+    query/4
 ]).
 
 
@@ -66,20 +66,29 @@ handle_call(ping, _From, State) ->
     end;
 
 
-handle_call({query, Term}, _From, State) ->
-    Cmd = <<"QUERY shortcuts default \"", Term/binary, "\" LIMIT(40)\n" >>,
+handle_call({query, Collection, Bucket, Term}, _From, State) ->
+    CmdList = lists:join(<<" ">>, [
+        <<"QUERY">>,
+        Collection,
+        Bucket,
+        <<"\"", Term/binary, "\"\n">>
+    ]),
+
+    Cmd = erlang:iolist_to_binary(CmdList),
     io:format("QUERY: ~p~n", [Cmd]),
+
     ok = gen_tcp:send(
         State#state.connection,
         Cmd
     ),
 
-    {ok, <<"PENDING", QuertId/binary>>} = gen_tcp:recv(State#state.connection, 0),
-    io:format("QUERY ID: ~p~n", [QuertId]),
+    {ok, <<"PENDING ", QueryId/binary>>} = tcp_recv(State#state.connection),
+    io:format("QUERY ID: ~p~n", [QueryId]),
 
-    {ok, <<"EVENT", Result/binary>>} = gen_tcp:recv(State#state.connection, 0),
+    Size = size(QueryId),
+    {ok, <<"EVENT QUERY ", QueryId:Size/binary, " ", Result/binary>>} = tcp_recv(State#state.connection),
     io:format("RESULT: ~p~n", [Result]),
-    {reply, ok, State};
+    {reply, {ok, Result}, State};
 
 
 handle_call({push, Collection, Bucket, ObjectId, Content}, _From, State) ->
@@ -126,10 +135,6 @@ handle_cast(join_channel, #state{ mode = Mode, password = Password} = State) ->
     end;
 
 
-
-    %{ok, Response} = gen_tcp:recv(Connection, 0, 1000),
-
-
 handle_cast(_Msg, State) ->
     {stop, normal, State}.
 
@@ -167,8 +172,8 @@ push(Pid, Collection, Bucket, ObjectId, Content) ->
     gen_server:call(Pid, {push, Collection, Bucket, ObjectId, Content}).
 
 
-query(Pid, Term) ->
-    gen_server:call(Pid, {query, Term}).
+query(Pid, Collection, Bucket, Term) ->
+    gen_server:call(Pid, {query, Collection, Bucket, Term}).
 
 
 %% ===================================================================
@@ -190,3 +195,16 @@ connect(#state{ host = Host, port = Port }) ->
             io:format("Sonic Connection Error: ~p~n", [Reason]),
             {error, Reason}
     end.
+
+
+tcp_recv(Connection) ->
+    case gen_tcp:recv(Connection, 0) of
+        {ok, Response} -> {ok, chomp(Response)};
+        Error          -> Error
+    end.
+
+
+chomp(Bitstring) ->
+    [Result|_] = binary:split(Bitstring, <<"\r\n">>),
+
+    Result.
