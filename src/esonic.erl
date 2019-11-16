@@ -13,7 +13,10 @@
 -export([
     ping/1,
     push/5,
-    query/4
+    query/4,
+    count/2,
+    flushc/2,
+    trigger/2
 ]).
 
 
@@ -66,20 +69,14 @@ handle_call(ping, _From, State) ->
 
 
 handle_call({query, Collection, Bucket, Term}, _From, State) ->
-    CmdList = lists:join(<<" ">>, [
+    Command = to_command([
         <<"QUERY">>,
         Collection,
         Bucket,
-        <<"\"", Term/binary, "\"\n">>
+        <<"\"", Term/binary, "\"">>
     ]),
 
-    Cmd = erlang:iolist_to_binary(CmdList),
-    io:format("QUERY: ~p~n", [Cmd]),
-
-    ok = gen_tcp:send(
-        State#state.connection,
-        Cmd
-    ),
+    ok = gen_tcp:send(State#state.connection, Command),
 
     {ok, <<"PENDING ", QueryId/binary>>} = tcp_recv(State#state.connection),
     io:format("QUERY ID: ~p~n", [QueryId]),
@@ -91,20 +88,15 @@ handle_call({query, Collection, Bucket, Term}, _From, State) ->
 
 
 handle_call({push, Collection, Bucket, ObjectId, Content}, _From, State) ->
-    CmdList = lists:join(<<" ">>, [
+    Command = to_command([
         <<"PUSH">>,
         Collection,
         Bucket,
         ObjectId,
-        <<"\"", Content/binary, "\"\n">>
+        <<"\"", Content/binary, "\"">>
     ]),
 
-    Cmd = erlang:iolist_to_binary(CmdList),
-
-    ok = gen_tcp:send(
-        State#state.connection,
-        Cmd
-    ),
+    ok = gen_tcp:send(State#state.connection, Command),
 
     case gen_tcp:recv(State#state.connection, 0) of
         {ok, <<"OK", _/binary>>} ->
@@ -113,16 +105,52 @@ handle_call({push, Collection, Bucket, ObjectId, Content}, _From, State) ->
         WTF ->
             io:format("WTF ~p~n", [WTF]),
             {stop, WTF, State}
+    end;
+
+
+handle_call({count, Collection}, _From, State) ->
+    Command = to_command([<<"COUNT">>, Collection]),
+
+    ok = gen_tcp:send(State#state.connection, Command),
+
+    case tcp_recv(State#state.connection) of
+        {ok, <<"RESULT ", Count/binary>>} ->
+            {reply, {ok, Count}, State};
+        Error ->
+            {reply, Error, State}
+    end;
+
+
+handle_call({flushc, Collection}, _From, State) ->
+    Command = to_command([<<"FLUSHC">>, Collection]),
+
+    ok = gen_tcp:send(State#state.connection, Command),
+
+    case tcp_recv(State#state.connection) of
+        {ok, <<"RESULT ", Count/binary>>} ->
+            {reply, {ok, Count}, State};
+        Error ->
+            {reply, Error, State}
+    end;
+
+
+handle_call(consolidate, _From, State) ->
+    Command = to_command([<<"TRIGGER">>, <<"CONSOLIDATE">>]),
+
+    ok = gen_tcp:send(State#state.connection, Command),
+
+    case tcp_recv(State#state.connection) of
+        {ok, <<"OK">>} ->
+            {reply, ok, State};
+        Error ->
+            {reply, Error, State}
     end.
 
 
 handle_cast(join_channel, #state{ mode = Mode, password = Password} = State) ->
+    Command = to_command(["START", Mode, Password]),
 
-    Command = lists:join(" ", ["START", Mode, Password, "\n"]),
-    CommandBin = erlang:iolist_to_binary(Command),
-    io:format("COMMAND ~p~n" , [CommandBin]),
-
-    ok = gen_tcp:send(State#state.connection, CommandBin),
+    ok = gen_tcp:send(State#state.connection, Command),
 
     case gen_tcp:recv(State#state.connection, 0) of
         {ok, <<"STARTED ", _/binary>>} ->
@@ -157,7 +185,8 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 terminate(_Reason, _State) ->
-    whatever.
+    io:format("STOPPED~n"),
+    shutdown.
 
 %% ===================================================================
 %% Public API
@@ -173,6 +202,18 @@ push(Pid, Collection, Bucket, ObjectId, Content) ->
 
 query(Pid, Collection, Bucket, Term) ->
     gen_server:call(Pid, {query, Collection, Bucket, Term}).
+
+
+count(Pid, Collection) ->
+    gen_server:call(Pid, {count, Collection}).
+
+
+flushc(Pid, Collection) ->
+    gen_server:call(Pid, {flushc, Collection}).
+
+
+trigger(Pid, consolidate) ->
+    gen_server:call(Pid, consolidate).
 
 
 %% ===================================================================
@@ -201,6 +242,12 @@ tcp_recv(Connection) ->
         {ok, Response} -> {ok, chomp(Response)};
         Error          -> Error
     end.
+
+
+to_command(CommandList) ->
+    CommandWithSpaces = lists:join(<<" ">>, CommandList),
+
+    erlang:iolist_to_binary([CommandWithSpaces, <<"\r\n">>]).
 
 
 chomp(Bitstring) ->
