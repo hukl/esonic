@@ -13,7 +13,7 @@
 
 -export([
     ping/1,
-    ingest/2,
+    push/5,
     query/2
 ]).
 
@@ -67,11 +67,11 @@ handle_call(ping, _From, State) ->
 
 
 handle_call({query, Term}, _From, State) ->
-    Query = <<"QUERY shortcuts default \"", Term/binary, "\" LIMIT(40)\n" >>,
-    io:format("QUERY: ~p~n", [Query]),
+    Cmd = <<"QUERY shortcuts default \"", Term/binary, "\" LIMIT(40)\n" >>,
+    io:format("QUERY: ~p~n", [Cmd]),
     ok = gen_tcp:send(
         State#state.connection,
-        Query
+        Cmd
     ),
 
     {ok, <<"PENDING", QuertId/binary>>} = gen_tcp:recv(State#state.connection, 0),
@@ -79,12 +79,38 @@ handle_call({query, Term}, _From, State) ->
 
     {ok, <<"EVENT", Result/binary>>} = gen_tcp:recv(State#state.connection, 0),
     io:format("RESULT: ~p~n", [Result]),
-    {reply, ok, State}.
+    {reply, ok, State};
+
+
+handle_call({push, Collection, Bucket, ObjectId, Content}, _From, State) ->
+    CmdList = lists:join(<<" ">>, [
+        <<"PUSH">>,
+        Collection,
+        Bucket,
+        ObjectId,
+        <<"\"", Content/binary, "\"\n">>
+    ]),
+
+    Cmd = erlang:iolist_to_binary(CmdList),
+
+    ok = gen_tcp:send(
+        State#state.connection,
+        Cmd
+    ),
+
+    case gen_tcp:recv(State#state.connection, 0) of
+        {ok, <<"OK", _/binary>>} ->
+            io:format("PUSHED ~n"),
+            {reply, ok, State};
+        WTF ->
+            io:format("WTF ~p~n", [WTF]),
+            {stop, WTF, State}
+    end.
 
 
 handle_cast(join_channel, #state{ mode = Mode, password = Password} = State) ->
 
-    Command = lists:join(" ", ["Start", Mode, Password, "\n"]),
+    Command = lists:join(" ", ["START", Mode, Password, "\n"]),
     CommandBin = erlang:iolist_to_binary(Command),
     io:format("COMMAND ~p~n" , [CommandBin]),
 
@@ -137,8 +163,9 @@ ping(Pid) ->
     gen_server:call(Pid, ping).
 
 
-ingest(Bucket, Document) ->
-    ok.
+push(Pid, Collection, Bucket, ObjectId, Content) ->
+    gen_server:call(Pid, {push, Collection, Bucket, ObjectId, Content}).
+
 
 query(Pid, Term) ->
     gen_server:call(Pid, {query, Term}).
