@@ -2,7 +2,6 @@
 
 
 -behaviour(gen_server).
--behaviour(poolboy_worker).
 
 % Managment API
 -export([start_link/1]).
